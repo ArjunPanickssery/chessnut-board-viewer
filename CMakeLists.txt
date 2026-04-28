@@ -30,7 +30,7 @@ endif()
 
 
 # Debug mode
-# ADD_DEFINITIONS(-D_DEBUG_FLAG)
+ADD_DEFINITIONS(-D_DEBUG_FLAG)
 
 link_libraries(spdlog_header_only)
 
