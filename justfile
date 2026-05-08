@@ -100,6 +100,14 @@ system-info:
   @echo "os: {{os()}}"
   @echo "os family: {{os_family()}}"
 
+# run Python unit tests
+python-test:
+    python3 -m pytest
+
+# run Python HID diagnostics
+python-diagnose:
+    python3 -m chessnut_board_viewer diagnose
+
 # run clang-tidy (see .clang-tidy)
 tidy:
     clang-tidy --version

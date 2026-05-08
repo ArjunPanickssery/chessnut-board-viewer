@@ -1,8 +1,15 @@
 .cache/
+.coverage
+.pytest_cache/
+.venv/
 build/
 build-for-coverage/
 coverage-report/
 generated-docs/
+htmlcov/
+*.egg-info/
+__pycache__/
+*.py[cod]
 
 # Microsoft Visual Studio
 .vs/
