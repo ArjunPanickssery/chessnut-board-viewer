@@ -1,63 +1,66 @@
-# Chessnut HID Protocol Notes
+# Chessnut Protocol Notes
 
-These are the protocol facts this project currently relies on. They were
-verified against the EasyLinkSDK files in `sdk/EasyLink.cpp` and the original
-Python scripts in this repository.
+## Realtime Mode
 
-## Discovery
-
-- Vendor ID: `0x2d80`
-- Board data interface usage page: `0xff00`
-- Chessnut Pro product IDs are in the `0x81xx` family.
-- The EasyLinkSDK checks product families by masking with `product_id & 0xff00`.
-
-## Mode Command
-
-Realtime mode is selected with:
+Send:
 
 ```text
 21 01 00
 ```
 
-Upload mode is:
+BLE confirmation/misc notifications may include:
 
 ```text
-21 01 01
+23 01 00
+21 01 00
 ```
-
-The SDK writes the three-byte command directly. The Python transport tries that
-first. If the HID stack rejects it, fallback writes include report-size padding
-and a leading zero report ID for stricter macOS behavior.
 
 ## Board Reports
 
-Realtime board reports begin with `0x01`.
+USB/HID:
 
-The 64 squares are nibble-packed into 32 bytes beginning at offset 2. Decoding
-mirrors the EasyLinkSDK: ranks are processed top-to-bottom and files are read
-right-to-left from the packed data. The resulting string is placement-only FEN,
-for example:
+```text
+01 3d <32 board bytes> <padding/extra bytes>
+```
+
+BLE:
+
+```text
+01 24 <32 board bytes> <4 trailing bytes>
+```
+
+The project accepts either shape in the parser so shared tests can validate the
+common board-state logic.
+
+## Starting Position
+
+The starting position board bytes are:
+
+```text
+58 23 31 85 44 44 44 44 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 77 77 77 77 a6 c9 9b 6a
+```
+
+Decoded FEN:
 
 ```text
 rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR
 ```
 
-Piece nibble table:
+## LED Commands
 
 ```text
-0 -> empty
-1 -> q
-2 -> k
-3 -> b
-4 -> p
-5 -> n
-6 -> R
-7 -> P
-8 -> r
-9 -> B
-10 -> N
-11 -> Q
-12 -> K
+0a 08 <R8> <R7> <R6> <R5> <R4> <R3> <R2> <R1>
 ```
 
-Battery reports begin with `0x2a`; byte 2 is the percentage when nonzero.
+File bits in each rank byte are:
+
+```text
+A=128 B=64 C=32 D=16 E=8 F=4 G=2 H=1
+```
+
+For E2 and E4:
+
+```text
+0a 08 00 00 00 00 08 00 08 00
+```

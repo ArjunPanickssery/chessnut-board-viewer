@@ -1,15 +1,6 @@
-.cache/
-.coverage
-.pytest_cache/
-.venv/
+.DS_Store
 build/
-build-for-coverage/
-coverage-report/
-generated-docs/
-htmlcov/
-*.egg-info/
-__pycache__/
-*.py[cod]
-
-# Microsoft Visual Studio
-.vs/
+*.o
+*.dSYM/
+*.app/
+compile_commands.json

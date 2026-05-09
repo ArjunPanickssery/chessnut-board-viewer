@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+APP="$ROOT_DIR/build/ChessnutBLE.app"
+
+if [ ! -d "$APP" ]; then
+  make -C "$ROOT_DIR" app >/dev/null
+fi
+
+TMP_BASE="${TMPDIR:-/tmp}/chessnut-ble.$$"
+LOG_FILE="$TMP_BASE.log"
+STATUS_FILE="$TMP_BASE.status"
+OPEN_ERR_FILE="$TMP_BASE.open.err"
+rm -f "$LOG_FILE" "$STATUS_FILE" "$OPEN_ERR_FILE"
+
+if ! open -W -n "$APP" --args --log "$LOG_FILE" --status "$STATUS_FILE" "$@" 2>"$OPEN_ERR_FILE"; then
+  cat "$OPEN_ERR_FILE" >&2
+fi
+
+if [ -f "$LOG_FILE" ]; then
+  cat "$LOG_FILE"
+fi
+
+if [ -f "$STATUS_FILE" ]; then
+  STATUS=$(cat "$STATUS_FILE")
+  rm -f "$LOG_FILE" "$STATUS_FILE" "$OPEN_ERR_FILE"
+  exit "$STATUS"
+fi
+
+if [ -s "$OPEN_ERR_FILE" ]; then
+  cat "$OPEN_ERR_FILE" >&2
+fi
+
+rm -f "$LOG_FILE" "$STATUS_FILE" "$OPEN_ERR_FILE"
+echo "Chessnut BLE app did not report an exit status" >&2
+exit 1

@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Local web UI for viewing live Chessnut BLE board state."""
+
+from __future__ import annotations
+
+import argparse
+import atexit
+import json
+import os
+import queue
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import webbrowser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse
+
+
+ROOT = Path(__file__).resolve().parents[1]
+STATIC = ROOT / "static"
+APP = ROOT / "build" / "ChessnutBLE.app"
+BOARD_RE = re.compile(
+    r"^Board\s+(?P<index>\d+)\s+\((?P<label>.*)\):\s+"
+    r"(?P<fen>[rnbqkpRNBQKP1-8/]+)(?:\s+t=(?P<time>\d+)ms)?"
+)
+CHILD_MATCHES: set[str] = set()
+CHILD_LOCK = threading.Lock()
+
+
+def cleanup_children() -> None:
+    with CHILD_LOCK:
+        matches = list(CHILD_MATCHES)
+    for match in matches:
+        subprocess.run(["pkill", "-f", match], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+atexit.register(cleanup_children)
+
+
+class StateHub:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.boards: dict[str, dict[str, object]] = {}
+        self.status = "Starting"
+        self.events: list[dict[str, object]] = []
+        self.subscribers: list[queue.Queue[dict[str, object]]] = []
+
+    def snapshot(self) -> dict[str, object]:
+        with self.lock:
+            return {"boards": self.boards, "status": self.status}
+
+    def subscribe(self) -> queue.Queue[dict[str, object]]:
+        q: queue.Queue[dict[str, object]] = queue.Queue()
+        with self.lock:
+            self.subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue[dict[str, object]]) -> None:
+        with self.lock:
+            if q in self.subscribers:
+                self.subscribers.remove(q)
+
+    def publish(self, event: dict[str, object]) -> None:
+        with self.lock:
+            self.events.append(event)
+            self.events = self.events[-200:]
+            subscribers = list(self.subscribers)
+        for q in subscribers:
+            q.put(event)
+
+    def set_status(self, message: str) -> None:
+        with self.lock:
+            self.status = message
+        self.publish({"type": "status", "message": message})
+
+    def update_board(self, board: dict[str, object]) -> None:
+        key = str(board["board_index"])
+        with self.lock:
+            previous = self.boards.get(key, {})
+            report_count = int(previous.get("report_count", 0)) + 1
+            board["report_count"] = report_count
+            board["received_at"] = time.strftime("%H:%M:%S")
+            self.boards[key] = board
+        self.publish({"type": "board", "board": board})
+
+
+def split_label(label: str) -> tuple[str, str]:
+    label = label.strip()
+    if " " not in label:
+        return label, ""
+    name, identifier = label.rsplit(" ", 1)
+    return name, identifier
+
+
+def parse_board_line(line: str) -> dict[str, object] | None:
+    match = BOARD_RE.match(line.strip())
+    if not match:
+        return None
+    name, identifier = split_label(match.group("label"))
+    board: dict[str, object] = {
+        "board_index": int(match.group("index")),
+        "name": name,
+        "identifier": identifier,
+        "fen": match.group("fen"),
+    }
+    if match.group("time"):
+        board["timestamp_ms"] = int(match.group("time"))
+    return board
+
+
+def ensure_app() -> None:
+    if APP.exists():
+        return
+    subprocess.run(["make", "app"], cwd=ROOT, check=True)
+
+
+def tail_file(path: Path, process: subprocess.Popen[bytes], hub: StateHub) -> None:
+    offset = 0
+    while process.poll() is None or path.exists():
+        if not path.exists():
+            time.sleep(0.1)
+            continue
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            handle.seek(offset)
+            for line in handle:
+                text = line.strip()
+                if not text:
+                    continue
+                board = parse_board_line(text)
+                if board is not None:
+                    hub.update_board(board)
+                elif text.startswith("Watching"):
+                    hub.set_status(text)
+                elif "failed" in text.lower() or text.startswith("Hint:"):
+                    hub.set_status(text)
+            offset = handle.tell()
+        if process.poll() is not None:
+            break
+        time.sleep(0.1)
+
+
+def run_ble_watch(hub: StateHub, boards: int, timeout: int, name: str | None) -> None:
+    ensure_app()
+    with tempfile.TemporaryDirectory(prefix="chessnut-viewer.") as tmp:
+        log_path = Path(tmp) / "watch.log"
+        status_path = Path(tmp) / "watch.status"
+        args = [
+            "open",
+            "-W",
+            "-n",
+            str(APP),
+            "--args",
+            "--log",
+            str(log_path),
+            "--status",
+            str(status_path),
+            "watch",
+            "--boards",
+            str(boards),
+            "--timeout",
+            str(timeout),
+        ]
+        if name:
+            args.extend(["--name", name])
+        hub.set_status("Launching Chessnut BLE")
+        with CHILD_LOCK:
+            CHILD_MATCHES.add(str(log_path))
+        process = subprocess.Popen(args, cwd=ROOT)
+        try:
+            tail_file(log_path, process, hub)
+            process.wait()
+            if status_path.exists() and status_path.read_text().strip() not in {"0", ""}:
+                hub.set_status("Bluetooth watch exited")
+        finally:
+            with CHILD_LOCK:
+                CHILD_MATCHES.discard(str(log_path))
+
+
+def run_demo(hub: StateHub) -> None:
+    positions = [
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+        "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR",
+        "rnbqkbnr/pppppppp/8/8/4P3/5N2/PPPP1PPP/RNBQKB1R",
+    ]
+    hub.set_status("Demo")
+    index = 0
+    while True:
+        hub.update_board(
+            {
+                "board_index": 0,
+                "name": "Demo Chessnut Pro",
+                "identifier": "DEMO",
+                "fen": positions[index % len(positions)],
+                "timestamp_ms": index,
+            }
+        )
+        index += 1
+        time.sleep(2)
+
+
+class ViewerHandler(BaseHTTPRequestHandler):
+    hub: StateHub
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path == "/":
+            self.send_file(STATIC / "index.html", "text/html; charset=utf-8")
+        elif path == "/state":
+            self.send_json(self.hub.snapshot())
+        elif path == "/events":
+            self.send_events()
+        else:
+            file_path = (STATIC / path.lstrip("/")).resolve()
+            if not str(file_path).startswith(str(STATIC.resolve())):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            content_type = {
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".svg": "image/svg+xml",
+            }.get(file_path.suffix, "application/octet-stream")
+            self.send_file(file_path, content_type)
+
+    def send_file(self, path: Path, content_type: str) -> None:
+        if not path.exists() or not path.is_file():
+            self.send_error(HTTPStatus.NOT_FOUND)
+            return
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", content_type)
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_json(self, payload: object) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_sse(self, event: str, payload: object) -> None:
+        data = json.dumps(payload)
+        self.wfile.write(f"event: {event}\ndata: {data}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+    def send_events(self) -> None:
+        q = self.hub.subscribe()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("connection", "keep-alive")
+        self.end_headers()
+        try:
+            self.send_sse("snapshot", self.hub.snapshot())
+            while True:
+                try:
+                    event = q.get(timeout=20)
+                except queue.Empty:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                if event["type"] == "board":
+                    self.send_sse("board", event["board"])
+                elif event["type"] == "status":
+                    self.send_sse("status", {"message": event["message"]})
+        except (BrokenPipeError, ConnectionError):
+            pass
+        finally:
+            self.hub.unsubscribe(q)
+
+
+def choose_port(preferred: int) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        if preferred == 0:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+        try:
+            sock.bind(("127.0.0.1", preferred))
+            return preferred
+        except OSError:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--boards", type=int, default=1)
+    parser.add_argument("--timeout", type=int, default=86400)
+    parser.add_argument("--name")
+    parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--no-open", action="store_true")
+    args = parser.parse_args(argv)
+
+    hub = StateHub()
+    worker = threading.Thread(
+        target=run_demo if args.demo else run_ble_watch,
+        args=(hub,) if args.demo else (hub, args.boards, args.timeout, args.name),
+        daemon=True,
+    )
+    worker.start()
+
+    port = choose_port(args.port)
+    ViewerHandler.hub = hub
+    server = ThreadingHTTPServer(("127.0.0.1", port), ViewerHandler)
+    url = f"http://127.0.0.1:{port}/"
+    print(f"Chessnut viewer: {url}", flush=True)
+    if not args.no_open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped")
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

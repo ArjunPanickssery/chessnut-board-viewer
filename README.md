@@ -1,109 +1,127 @@
-# Chessnut Board Viewer
+# Chessnut BLE Tools for macOS
 
-USB HID tools and Tk viewers for Chessnut electronic chessboards, focused on
-making a Chessnut Pro reliable on macOS while preserving the old Windows-style
-viewer workflow.
+This repository is a fresh Bluetooth-first experiment for Chessnut boards on
+macOS. The previous USB/HID attempt is preserved in git as:
 
-The original repository carried a copy of Chessnut's EasyLinkSDK C/C++ code.
-That SDK remains in `sdk/` and `thirdparty/` as a protocol reference, but the
-Python tools now talk directly to the board through Python's `hid` module.
-
-## What Works
-
-- Finds Chessnut HID devices with vendor `0x2d80`.
-- Prefers Chessnut Pro product-family IDs `0x81xx`.
-- Uses the board data HID interface at usage page `0xff00`.
-- Opens boards by HID path, which allows two connected boards to be addressed
-  separately.
-- Sends realtime mode command `21 01 00`.
-- Reads 64-byte HID reports and decodes `01 ...` board-state reports into FEN.
-- Provides one-board terminal, one-board GUI, and two-board GUI entry points.
-- Provides diagnostics and mocked tests that do not need physical hardware.
-
-## macOS Quick Start
-
-```shell
-cd /Users/arjun/arjun/code/chessnut
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[hid,dev]"
+```sh
+git show c949ca9
 ```
 
-Connect the Chessnut Pro with a data-capable USB cable, wake it, and put it in
-yellow status LED USB/EasyLink mode.
+## What This Builds
 
-```shell
-chessnut-board diagnose
-chessnut-board smoke --boards 1 --timeout 5
-chessnut-board watch
-chessnut-board gui
+- A plain C protocol library for Chessnut board reports, FEN decoding, battery
+  packets, and LED commands.
+- A macOS CoreBluetooth transport exposed through a C API.
+- A CLI named `chessnut-ble` for scanning, probing, watching one or two boards,
+  and sending a simple LED command.
+- A local web viewer using the same CBurnett SVG pieces as the Gravity Chess
+  board at `/Users/arjun/arjun/code/gravity_chess`.
+- Unit tests that exercise the protocol without physical hardware.
+
+The public Chessnut EasyLinkSDK is useful as a protocol reference, but its
+current connection path is HID-only. Its `cl_connect()` path constructs
+`ChessLink::fromHidConnect()`, so this project does not reuse that transport.
+Instead, it reuses the same command/report semantics over BLE GATT.
+
+## Build And Test
+
+Requirements:
+
+- macOS
+- Xcode Command Line Tools
+- Bluetooth enabled
+
+```sh
+make clean
+make
+make test
 ```
 
-For two connected boards:
+The CLI will be built at:
 
-```shell
-chessnut-board smoke --boards 2 --timeout 5
-chessnut-board dual
+```sh
+./build/chessnut-ble
 ```
 
-The old script names still work after installing the project:
+macOS may attribute Bluetooth permission to the app that launched the command,
+not to the command-line binary itself. For normal Terminal use, prefer the app
+wrapper script:
 
-```shell
-python chessboard.py
-python chessboard_gui.py
-python chessboard_dual.py
+```sh
+./scripts/chessnut-ble-app scan --timeout 8
 ```
 
-## Commands
+## Hardware Smoke Tests
 
-- `chessnut-board diagnose`: prints Python, `hid`, VID/PID/usage-page, and setup
-  hints.
-- `chessnut-board list`: lists usable Chessnut board HID interfaces.
-- `chessnut-board smoke --boards N`: opens one or two boards, switches realtime
-  mode, and waits for live board reports.
-- `chessnut-board watch`: prints live FEN and an ASCII board in the terminal.
-- `chessnut-board gui`: opens the single-board Tk viewer.
-- `chessnut-board dual`: opens the two-board Tk viewer.
+First scan:
 
-## Development
-
-The Python package lives in `src/chessnut_board_viewer/`.
-
-```shell
-source .venv/bin/activate
-python -m pytest
-python -m chessnut_board_viewer diagnose
+```sh
+./scripts/chessnut-ble-app scan --timeout 8
 ```
 
-Tests use mocked HID devices, so they validate protocol decoding, discovery,
-write fallbacks, diagnostics, battery reports, and two-board selection without a
-physical board.
+If you do not see a board, confirm general Bluetooth scanning:
 
-## Troubleshooting
-
-Start with:
-
-```shell
-chessnut-board diagnose
-chessnut-board smoke --boards 1 --timeout 5
+```sh
+./scripts/chessnut-ble-app scan --timeout 8 --all
 ```
 
-If no board appears:
+Watch one board:
 
-- Use a data-capable USB cable. Many USB-C cables are charge-only.
-- Check Apple menu > About This Mac > More Info > System Report > USB.
-- Confirm the board is awake and showing the yellow status LED.
-- Quit Chessnut apps, browser integrations, or older viewers that may already
-  have the HID interface open.
-- Unplug/replug the board after changing mode.
+```sh
+./scripts/chessnut-ble-app watch --boards 1 --timeout 30
+```
 
-If the board opens but no FEN arrives:
+Normal `watch` output prints only changed positions. For raw realtime reports:
 
-- Move or lift a piece to force a realtime update.
-- Press the board reset/power button until the status LED is yellow.
-- Run `chessnut-board smoke --boards 1 --timeout 10` and copy the output into a
-  bug report.
+```sh
+./scripts/chessnut-ble-app watch --boards 1 --timeout 30 --all-reports
+```
 
-More detailed macOS notes are in [docs/macos-usb.md](docs/macos-usb.md).
-Protocol assumptions are in [docs/protocol.md](docs/protocol.md).
+Watch two boards for bughouse-style use:
+
+```sh
+./scripts/chessnut-ble-app watch --boards 2 --timeout 30
+```
+
+Verbose probe:
+
+```sh
+./scripts/chessnut-ble-app probe --boards 1 --timeout 30 --verbose
+```
+
+LED test:
+
+```sh
+./scripts/chessnut-ble-app led e2 e4 --hold 1500
+```
+
+Viewer UI:
+
+```sh
+./scripts/chessnut-viewer --boards 1
+```
+
+Two-board viewer:
+
+```sh
+./scripts/chessnut-viewer --boards 2
+```
+
+The viewer starts a local web server and opens your browser. It launches
+`ChessnutBLE.app` behind the scenes so Bluetooth permission remains attached to
+the signed app wrapper.
+
+## macOS Bluetooth Setup
+
+1. Turn on the Chessnut board and put it in Bluetooth mode.
+2. Close the official Chessnut app, EasyLink experiments, browser tabs using
+   Web Bluetooth, and any previous viewer process.
+3. Run `./scripts/chessnut-ble-app scan --timeout 8`.
+4. If macOS prompts for Bluetooth permission, grant it to `Chessnut BLE`.
+5. Restart the command after changing Bluetooth privacy permission.
+
+You usually should not manually pair a BLE GATT device in macOS Bluetooth
+settings. The CLI scans and connects through CoreBluetooth directly.
+
+More setup and troubleshooting notes are in
+[`docs/bluetooth-setup.md`](docs/bluetooth-setup.md).

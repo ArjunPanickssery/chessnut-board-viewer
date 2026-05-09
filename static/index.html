@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chessnut Board Viewer</title>
+    <link rel="stylesheet" href="/viewer.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="board-zone">
+        <div class="topbar">
+          <div>
+            <h1>Chessnut</h1>
+            <div id="status" class="status">Starting</div>
+          </div>
+          <div class="controls">
+            <div id="board-tabs" class="tabs" role="tablist" aria-label="Boards"></div>
+            <button id="flip" type="button" title="Flip board">↕</button>
+          </div>
+        </div>
+        <div id="board" class="board" aria-label="Chessnut board"></div>
+      </section>
+
+      <aside class="side-panel">
+        <section>
+          <h2>Connection</h2>
+          <dl class="facts">
+            <div><dt>Device</dt><dd id="device">Waiting</dd></div>
+            <div><dt>Last update</dt><dd id="updated">Never</dd></div>
+            <div><dt>Reports</dt><dd id="reports">0</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h2>Material</h2>
+          <div id="material" class="material"></div>
+        </section>
+        <section>
+          <h2>Position</h2>
+          <pre id="fen"></pre>
+        </section>
+        <section>
+          <h2>Log</h2>
+          <ol id="events" class="events"></ol>
+        </section>
+      </aside>
+    </main>
+    <script src="/viewer.js"></script>
+  </body>
+</html>

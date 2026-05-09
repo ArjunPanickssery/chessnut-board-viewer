@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>dev.codex.chessnut-ble</string>
+  <key>CFBundleName</key>
+  <string>chessnut-ble</string>
+  <key>CFBundleDisplayName</key>
+  <string>Chessnut BLE</string>
+  <key>CFBundleExecutable</key>
+  <string>chessnut-ble</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Connect to Chessnut electronic chessboards over Bluetooth Low Energy.</string>
+  <key>NSBluetoothPeripheralUsageDescription</key>
+  <string>Connect to Chessnut electronic chessboards over Bluetooth Low Energy.</string>
+</dict>
+</plist>
